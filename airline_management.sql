@@ -451,3 +451,184 @@ VALUES
 ('T0004', 'S002'),
 ('T0005', 'S001'),
 ('T0031', 'S002');
+
+
+
+
+
+-- List all passengers who have booked flights in the business or first-class with their respective ticket numbers, flight numbers, and departure times. 
+SELECT P.PassengerName, T.TicketNo, T.FlightNo, F.DepartureTime, TC.TicketClassName 
+FROM Passenger P, Booking B, Ticket T, Flight F, TicketClass TC
+WHERE P.PassengerID = B.PassengerID 
+	AND B.PNR = T.PNR 
+	AND T.FlightNo = F.FlightNo 
+	AND T.TicketClassID = TC.TicketClassID 
+	AND TC.TicketClassName IN ('Business', 'First-Class');
+	
+-- Show the total number of passengers who have booked tickets through the website for economy class in the last 30 days. 
+SELECT COUNT(*) AS TotalPassengers
+FROM Passenger P, Booking B, Ticket T, TicketClass TC, BookingChannel BC
+WHERE P.PassengerID = B.PassengerID 
+	AND B.PNR = T.PNR 
+	AND T.TicketClassID = TC.TicketClassID 
+	AND B.BookingChannelID = BC.BookingChannelID 
+	AND TC.TicketClassName = 'Economy' 
+	AND BC.BookingChannelName = 'Website' 
+	AND B.BookingDate >= DATEADD(DAY, -30, GETDATE());
+
+-- Display the average baggage fee for passengers in business and first-class over the last 6 months. 
+SELECT AVG(T.BaggageFee) AS AverageBaggageFee
+FROM Ticket T, TicketClass TC, Booking B
+WHERE T.TicketClassID = TC.TicketClassID
+	AND T.PNR = B.PNR
+	AND TC.TicketClassName IN ('Business', 'First-Class')
+	AND B.BookingDate >= DATEADD(MONTH,�-6,�GETDATE());
+
+-- Show the list of members who have earned more than 50,000 miles in total, along with their associated flight routes (Origin-Destination). 
+SELECT DISTINCT
+    P.PassengerName,
+    FR.Origin + '-' + FR.Destination AS Route,
+    FF.MilesBalance
+FROM FrequentFlyer FF
+JOIN Passenger P ON FF.PassengerID = P.PassengerID
+JOIN Booking B ON P.PassengerID = B.PassengerID
+JOIN Ticket T ON T.PNR = B.PNR
+JOIN Flight F ON T.FlightNo = F.FlightNo
+JOIN FlightRoute FR ON F.RouteNo = FR.RouteNo
+WHERE FF.MilesBalance�>�50000;
+
+-- Show the list of refunds requested by passengers where the refund amount is greater than the average refund for month of March, including the Passenger Name, Refund Amount, and Refund Status.
+SELECT 
+    P.PassengerName,
+    PY.RefundAmount,
+    RS.RefundStatusName AS RefundStatus
+FROM Payment PY
+JOIN Booking B ON PY.PNR = B.PNR
+JOIN Passenger P ON B.PassengerID = P.PassengerID
+JOIN RefundStatus RS ON PY.RefundStatusID = RS.RefundStatusID
+WHERE PY.RefundAmount > (
+    SELECT AVG(RefundAmount)
+    FROM Payment
+    WHERE RefundAmount IS NOT NULL
+        AND MONTH(RefundRequestDate)�=�3
+);
+
+-- Find the total revenue generated for each ticket class (Economy, Business, First-Class) for all bookings in the last 6 months, broken down by flight route (Origin-Destination). Exclude passengers who have requested refunds in the last 6 months. 
+SELECT 
+    FR.Origin + '-' + FR.Destination AS Route,
+    TC.TicketClassName,
+    SUM(T.Price + T.BaggageFee + T.SeatSelectionFee) AS TotalRevenue
+FROM Ticket T
+JOIN Booking B ON T.PNR = B.PNR
+JOIN Flight F ON T.FlightNo = F.FlightNo
+JOIN FlightRoute FR ON F.RouteNo = FR.RouteNo
+JOIN TicketClass TC ON T.TicketClassID = TC.TicketClassID
+WHERE 
+    B.BookingDate >= DATEADD(MONTH, -6, GETDATE())
+    AND B.PNR NOT IN (
+        SELECT PNR FROM Payment
+        WHERE RefundRequestDate >= DATEADD(MONTH, -6, GETDATE())
+    )
+GROUP BY FR.Origin, FR.Destination, TC.TicketClassName
+ORDER BY Route, TC.TicketClassName;
+ 
+-- List the 5 flights with the highest number of bookings. Include flight number, origin, destination, and number of bookings. 
+SELECT TOP 5 
+    T.FlightNo,
+    FR.Origin,
+    FR.Destination,
+    COUNT(*) AS NumBookings
+FROM Ticket T
+JOIN Flight F ON T.FlightNo = F.FlightNo
+JOIN FlightRoute FR ON F.RouteNo = FR.RouteNo
+GROUP BY T.FlightNo, FR.Origin, FR.Destination
+ORDER BY NumBookings DESC;
+
+-- Which passenger has redeemed the most expensive reward in January 2025, and what is the name and value of that reward?
+SELECT TOP 1
+    P.PassengerName,
+    R.RewardName,
+    R.Value
+FROM RewardRedemption RR
+JOIN FrequentFlyer FF ON RR.FrequentFlyerNo = FF.FrequentFlyerNo
+JOIN Passenger P ON FF.PassengerID = P.PassengerID
+JOIN Reward R ON RR.RewardID = R.RewardID
+WHERE RR.RedemptionDate >= '2025-01-01' AND RR.RedemptionDate < '2025-02-01'
+ORDER BY R.Value DESC;
+
+-- List the full names of passengers who have booked wheelchair assistance and redeemed at least one reward, where the value of the redeemed reward is greater than the average value of all rewards. Group the results by the service name. 
+
+WITH HighValueRedeem AS (
+    SELECT DISTINCT FF.PassengerID
+    FROM RewardRedemption RR
+    JOIN FrequentFlyer FF ON RR.FrequentFlyerNo = FF.FrequentFlyerNo
+    JOIN Reward R ON RR.RewardID = R.RewardID
+    WHERE R.Value > (SELECT AVG(Value) FROM Reward)
+),
+WheelchairUsers AS (
+    SELECT DISTINCT B.PassengerID
+    FROM TicketSpecialService TSS
+    JOIN SpecialService SS ON TSS.ServiceID = SS.ServiceID
+    JOIN Ticket T ON TSS.TicketNo = T.TicketNo
+    JOIN Booking B ON T.PNR = B.PNR
+    WHERE SS.ServiceName = 'Wheelchair'
+)
+SELECT P.PassengerName, 'Wheelchair' AS ServiceName
+FROM Passenger P
+WHERE P.PassengerID IN (SELECT PassengerID FROM HighValueRedeem)
+  AND P.PassengerID IN (SELECT PassengerID FROM WheelchairUsers);
+
+-- Identify the days with the least travelers for the February 2025.
+WITH DailyCounts AS (
+    SELECT CAST(DepartureTime AS DATE) AS TravelDate, COUNT(*) AS TotalTravelers
+    FROM Ticket T
+    JOIN Flight F ON T.FlightNo = F.FlightNo
+    WHERE DepartureTime >= '2025-02-01' AND DepartureTime < '2025-03-01'
+    GROUP BY CAST(DepartureTime AS DATE)
+)
+SELECT TravelDate, TotalTravelers
+FROM DailyCounts
+WHERE TotalTravelers = (SELECT MIN(TotalTravelers) FROM DailyCounts);
+
+-- Find number of passengers who have taken domestic flights in the month of January 2025.
+SELECT COUNT(DISTINCT B.PassengerID) AS NumDomesticPassengers_Jan2025
+FROM Ticket T
+JOIN Flight F ON T.FlightNo = F.FlightNo
+JOIN FlightRoute FR ON F.RouteNo = FR.RouteNo
+JOIN Booking B ON T.PNR = B.PNR
+WHERE FR.OriginCountry = 'MY' AND FR.DestinationCountry = 'MY'
+	AND F.DepartureTime >= '2025-01-01' AND F.DepartureTime < '2025-02-01';
+
+-- Find the number of passengers above 15 years old on domestic flights.
+SELECT COUNT(DISTINCT B.PassengerID) AS NumDomesticPassengers_Above15
+FROM Ticket T
+JOIN Flight F ON T.FlightNo = F.FlightNo
+JOIN FlightRoute FR ON F.RouteNo = FR.RouteNo
+JOIN Booking B ON T.PNR = B.PNR
+JOIN Passenger P ON B.PassengerID = P.PassengerID
+WHERE FR.OriginCountry = 'MY' AND FR.DestinationCountry = 'MY'
+	AND DATEDIFF(YEAR, P.PassengerDOB, F.DepartureTime) > 15;
+
+-- Show the total ticket revenue for flights departing in January 2025, grouped by flight number and ordered by highest revenue. 
+SELECT F.FlightNo, SUM(T.Price + T.BaggageFee + T.SeatSelectionFee) AS TotalRevenue
+FROM Ticket T
+JOIN Flight F ON T.FlightNo = F.FlightNo
+WHERE F.DepartureTime BETWEEN '2025-01-01' AND '2025-01-31'
+GROUP BY F.FlightNo
+ORDER BY TotalRevenue DESC;
+
+-- Which month has the highest prices for international flights?
+SELECT TOP 1 MONTH(F.DepartureTime) AS MonthNumber, AVG(T.Price) AS AveragePrice
+FROM Ticket T
+JOIN Flight F ON T.FlightNo = F.FlightNo
+JOIN FlightRoute FR ON F.RouteNo = FR.RouteNo
+WHERE FR.OriginCountry <> 'MY' OR FR.DestinationCountry <> 'MY'
+GROUP BY MONTH(F.DepartureTime)
+ORDER BY AveragePrice DESC;
+
+--  Which class is most preferred by passengers for their flights?
+SELECT TOP 1 TC.TicketClassName, COUNT(*) AS NumberOfBookings
+FROM Ticket T
+JOIN TicketClass TC ON T.TicketClassID = TC.TicketClassID
+GROUP BY TC.TicketClassName
+ORDER BY NumberOfBookings DESC;	
